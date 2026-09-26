@@ -3,31 +3,270 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>港口泊位与航道调度</title>
+  <title>复航重排台 · 港口调度</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; }
-    main { max-width: 960px; margin: auto; }
-    button { padding: .55rem .9rem; cursor: pointer; }
-    pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
-    .row { display: flex; gap: 1rem; align-items: center; }
+    :root { --line:#d9e0e6; --muted:#6b7a87; --bg:#f4f6f8; --accent:#155eef; --warn:#b25e09; --danger:#b42318; --ok:#067647; }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; margin: 0; color: #17212b; background: var(--bg); }
+    main { max-width: 1180px; margin: auto; padding: 1.5rem; }
+    h1 { margin: 0 0 .25rem; font-size: 1.4rem; }
+    h2 { font-size: 1.05rem; margin: 0 0 .75rem; }
+    .sub { color: var(--muted); margin: 0 0 1rem; font-size: .9rem; }
+    .bar { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: .85rem 1rem; margin-bottom: 1rem; }
+    .badge { display: inline-block; padding: .15rem .6rem; border-radius: 999px; font-size: .8rem; font-weight: 600; }
+    .badge.open { background:#e7f6ec; color: var(--ok); }
+    .badge.closed { background:#fdecec; color: var(--danger); }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 1rem; }
+    @media (max-width: 960px) { .grid { grid-template-columns: repeat(2, 1fr);} }
+    .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:1rem; margin-bottom:1rem; }
+    label { display:block; font-size:.78rem; color:var(--muted); margin-bottom:.25rem; }
+    input, select { width:100%; padding:.45rem .55rem; border:1px solid var(--line); border-radius:6px; font-size:.9rem; }
+    button { padding:.5rem .9rem; border:1px solid var(--line); border-radius:6px; background:#fff; cursor:pointer; font-size:.88rem; }
+    button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+    button.danger { color:var(--danger); border-color:#f0c4c0; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    table { width:100%; border-collapse:collapse; font-size:.85rem; }
+    th, td { text-align:left; padding:.5rem .55rem; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { color:var(--muted); font-weight:600; white-space:nowrap; }
+    tr.dg td:first-child { border-left:3px solid var(--danger); }
+    .tag { display:inline-block; padding:.05rem .45rem; border-radius:4px; font-size:.75rem; }
+    .tag.high { background:#fdecec; color:var(--danger); }
+    .tag.medium { background:#fef3e2; color:var(--warn); }
+    .tag.low { background:#eef2f6; color:#475467; }
+    .state { font-weight:600; }
+    .state.waiting { color:var(--warn); }
+    .state.berthed { color:var(--ok); }
+    .state.draft,.state.confirmed { color:var(--accent); }
+    .state.departed,.state.cancelled { color:var(--muted); }
+    .reason { color:var(--warn); font-size:.78rem; }
+    .muted { color:var(--muted); font-size:.78rem; }
+    .ok-text { color:var(--ok); font-size:.78rem; }
+    .flash { font-size:.85rem; margin-left:auto; }
+    .flash.err { color:var(--danger); }
+    .flash.ok { color:var(--ok); }
+    .ops button { padding:.25rem .55rem; font-size:.78rem; margin-right:.3rem; }
+    .timeline { font-size:.8rem; max-height:180px; overflow:auto; }
+    .timeline div { padding:.25rem 0; border-bottom:1px dashed var(--line); }
   </style>
 </head>
 <body>
 <main>
-  <h1>港口泊位与航道调度</h1>
-  <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
-  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
-  <pre id="output">点击上方按钮读取服务状态。</pre>
+  <h1>复航重排台</h1>
+  <p class="sub">封航后逐船电话确认改为统一重排：候泊顺序、独占航道时段、泊位占用分别保存，逐船写明等待原因与进场时刻。</p>
+
+  <div class="bar">
+    <span>航道状态：<b id="channel-status">—</b></span>
+    <span class="muted" id="channel-detail"></span>
+    <button class="danger" id="btn-close">封航</button>
+    <button class="primary" id="btn-reopen">复航重排</button>
+    <button id="btn-refresh">刷新</button>
+    <span class="flash" id="flash"></span>
+  </div>
+
+  <div class="card">
+    <h2>新建船舶计划</h2>
+    <form id="vessel-form">
+      <div class="grid">
+        <div><label>船名 *</label><input name="vessel" required placeholder="HaiYun"></div>
+        <div><label>船长（联系人）*</label><input name="captain" required placeholder="Capt.Lin"></div>
+        <div><label>泊位 *</label><input name="berth" required placeholder="B12"></div>
+        <div><label>风险等级</label>
+          <select name="risk_level"><option value="low">low 低</option><option value="medium">medium 中</option><option value="high">high 高</option></select>
+        </div>
+        <div><label>危险品船</label>
+          <select name="dangerous_goods"><option value="false">否</option><option value="true">是</option></select>
+        </div>
+        <div><label>危险品等级（危险品船必填）</label><input name="dangerous_class" placeholder="如 3"></div>
+        <div><label>到港时刻 eta（小时 0-23）</label><input name="eta_hour" type="number" min="0" max="23" value="6" required></div>
+        <div><label>作业时长（小时）</label><input name="operation_duration_hours" type="number" step="0.5" min="0.5" value="6" required></div>
+        <div><label>船舶长度 m</label><input name="vessel_length_m" type="number" step="0.1" value="180" required></div>
+        <div><label>泊位长度 m</label><input name="berth_length_m" type="number" step="0.1" value="220" required></div>
+        <div><label>吃水 m</label><input name="draft_m" type="number" step="0.1" value="10.2" required></div>
+        <div><label>泊位水深 m</label><input name="berth_depth_m" type="number" step="0.1" value="12.0" required></div>
+      </div>
+      <p style="margin:.75rem 0 0"><button class="primary" type="submit">建档</button></p>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>船舶动态（逐船可看等待原因 / 进场时刻）</h2>
+    <table>
+      <thead><tr><th>船名 / 船长</th><th>泊位</th><th>风险</th><th>吃水</th><th>到港</th><th>作业时长</th><th>状态</th><th>等待原因 / 进场信息</th><th>操作</th></tr></thead>
+      <tbody id="records-body"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>复航参数（最近一次：批次 <span id="batch-id">—</span>）</h2>
+    <div class="grid">
+      <div><label>封航时刻 close_hour</label><input id="close-hour" type="number" min="0" value="8"></div>
+      <div><label>复航时刻 reopen_hour</label><input id="reopen-hour" type="number" min="0" value="12"></div>
+      <div><label>航道水深 m</label><input id="channel-depth" type="number" step="0.1" value="12.0"></div>
+      <div><label>单船过航时长 h</label><input id="transit-hours" type="number" step="0.5" value="1"></div>
+      <div><label>引航员（编号:可派时刻，逗号分隔）</label><input id="pilots" value="P-01:12,P-02:14" style="grid-column: span 3;"></div>
+    </div>
+    <p class="muted" style="margin-bottom:0">规则：危险品优先；同风险先到先服务；每艘船独占航道时段；吃水相对航道水深富余不足 0.5m 或缺引航员则顺延。</p>
+  </div>
+
+  <div class="grid" style="grid-template-columns: repeat(3, 1fr);">
+    <div class="card"><h2>候泊顺序</h2><table><thead><tr><th>#</th><th>船</th><th>原因</th></tr></thead><tbody id="queue-body"></tbody></table></div>
+    <div class="card"><h2>航道时段（独占）</h2><table><thead><tr><th>序</th><th>船</th><th>进场时段</th><th>引航员/顺延原因</th></tr></thead><tbody id="slots-body"></tbody></table></div>
+    <div class="card"><h2>泊位占用</h2><table><thead><tr><th>泊位</th><th>船</th><th>占用区间</th><th>来源</th></tr></thead><tbody id="occ-body"></tbody></table></div>
+  </div>
 </main>
+
 <script>
-const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
-async function show(path) {
-  const response = await fetch(path, {headers});
-  const data = await response.json();
-  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+const H = {"X-User-Id":"dispatcher","X-Role":"port_controller","X-Org":"demo","Content-Type":"application/json"};
+const STATE_CN = {draft:"草稿", confirmed:"已确认引航", waiting:"候泊", berthed:"靠泊作业", departed:"已离泊", cancelled:"已取消"};
+const RISK_CN = {high:"高", medium:"中", low:"低"};
+const REASON_CN = {channel_closed:"封航候泊", berth_busy:"泊位占用", pilot_unavailable:"缺引航员", draft_insufficient:"吃水不足"};
+const $ = id => document.getElementById(id);
+
+function flash(msg, ok=false) { const f=$("flash"); f.textContent=msg; f.className="flash "+(ok?"ok":"err"); }
+function hour(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  const total = Math.round(v*60), day = Math.floor(total/1440), m = total%1440;
+  const hh = String(Math.floor(m/60)).padStart(2,"0"), mm = String(m%60).padStart(2,"0");
+  return (day ? "第"+(day+1)+"天" : "") + hh + ":" + mm;
 }
-document.getElementById("load").onclick = () => show("/api/records?limit=20");
-document.getElementById("stats").onclick = () => show("/api/stats");
+async function api(path, method="GET", body) {
+  const res = await fetch(path, {method, headers:H, body: body ? JSON.stringify(body) : undefined});
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || ("HTTP "+res.status));
+  return data;
+}
+
+function pilotsPayload() {
+  return $("pilots").value.split(",").map(s=>s.trim()).filter(Boolean).map(s => {
+    const [id, from] = s.split(":");
+    return {pilot_id: id.trim(), available_from: Number((from||"0").trim())};
+  });
+}
+
+async function refresh() {
+  try {
+    const [channel, records, plan] = await Promise.all([
+      api("/api/channel/status"), api("/api/records?limit=200"), api("/api/plans/latest")
+    ]);
+    const closed = channel.status === "closed";
+    const badge = '<span class="badge '+channel.status+'">'+(closed?"封航中":"通航")+'</span>';
+    $("channel-status").innerHTML = badge;
+    $("channel-detail").textContent = channel.last_event ? (channel.last_event.kind==="close"?"封航原因："+(channel.last_event.details.reason||"")+" @ "+hour(channel.last_event.at_hour):"复航批次 #"+channel.last_event.batch_id+" @ "+hour(channel.last_event.at_hour)) : "";
+    $("btn-close").disabled = closed;
+    $("btn-reopen").disabled = !closed;
+    renderRecords(records.items);
+    if (plan && plan.batch_id) renderPlan(plan);
+  } catch (e) { flash(e.message); }
+}
+
+function renderRecords(items) {
+  const body = $("records-body");
+  body.innerHTML = "";
+  for (const r of items) {
+    const p = r.payload, w = p.waiting || {}, rs = p.reschedule || {};
+    let info = "";
+    if (r.state === "waiting") {
+      if (rs.status === "scheduled") {
+        info = '<span class="ok-text">进场航道时段 '+hour(rs.channel_start_hour)+'–'+hour(rs.channel_end_hour)+(rs.pilot_id? " · 引航员 "+rs.pilot_id : "")+'</span>'+(rs.delay_detail ? '<br><span class="reason">顺延：'+rs.delay_detail+'</span>' : '');
+      } else if (rs.status === "postponed") {
+        info = '<span class="reason">顺延：'+(rs.postpone_detail||REASON_CN[rs.postpone_reason]||rs.postpone_reason)+'</span>';
+      } else {
+        info = '<span class="reason">'+(REASON_CN[w.reason]||w.reason||"等待重排")+'：'+(w.reason_text||"")+'</span>';
+      }
+      if (w.queue_position) info += '<br><span class="muted">候泊顺位 #'+w.queue_position+'（自 '+hour(w.since_hour)+'）</span>';
+    } else if (r.state === "berthed") {
+      info = '<span class="muted">泊位作业继续至 '+hour(p.operation_end_hour ?? p.etd_hour)+'</span>';
+    }
+    const tr = document.createElement("tr");
+    if (p.dangerous_goods) tr.className = "dg";
+    tr.innerHTML =
+      '<td>'+p.vessel+'<div class="muted">'+(p.captain||"")+'</div></td>'+
+      '<td>'+p.berth+'</td>'+
+      '<td><span class="tag '+p.risk_level+'">'+RISK_CN[p.risk_level]+(p.dangerous_goods?" ⚠"+(p.dangerous_class||""):"")+'</span></td>'+
+      '<td>'+p.draft_m+'m</td>'+
+      '<td>'+hour(Number(p.eta_hour))+'</td>'+
+      '<td>'+p.operation_duration_hours+'h</td>'+
+      '<td><span class="state '+r.state+'">'+STATE_CN[r.state]+'</span></td>'+
+      '<td>'+(info||'<span class="muted">—</span>')+'</td>'+
+      '<td class="ops">'+
+        (r.state==="draft" ? '<button data-act="confirm" data-id="'+r.id+'" data-v="'+r.version+'">确认引航</button>' : "")+
+        (r.state==="confirmed"||r.state==="waiting" ? '<button data-act="berth" data-id="'+r.id+'" data-v="'+r.version+'">靠泊</button>' : "")+
+        (r.state==="berthed" ? '<button data-act="depart" data-id="'+r.id+'" data-v="'+r.version+'">离泊</button>' : "")+
+        (r.state==="draft"||r.state==="confirmed"||r.state==="waiting" ? '<button data-act="cancel" data-id="'+r.id+'" data-v="'+r.version+'">取消</button>' : "")+
+      '</td>';
+    body.appendChild(tr);
+  }
+}
+
+function renderPlan(plan) {
+  $("batch-id").textContent = "#"+plan.batch_id;
+  const qb = $("queue-body"); qb.innerHTML = "";
+  for (const q of plan.queue) {
+    const tr = document.createElement("tr");
+    if (q.dangerous_goods) tr.className = "dg";
+    tr.innerHTML = '<td>'+q.position+'</td><td>'+q.vessel+'<div class="muted">'+q.berth+' · 到港'+hour(q.eta_hour)+'</div></td>'+
+      '<td><span class="reason">'+(REASON_CN[q.reason]||q.reason)+'</span><div class="muted">'+(q.detail||"")+'</div></td>';
+    qb.appendChild(tr);
+  }
+  const sb = $("slots-body"); sb.innerHTML = "";
+  for (const s of plan.slots) {
+    const tr = document.createElement("tr");
+    const when = s.status==="scheduled" ? hour(s.start_hour)+'–'+hour(s.end_hour) : '<span class="reason">顺延</span>';
+    const who = s.status==="scheduled" ? (s.pilot_id||"")+(s.detail ? '<div class="reason">'+s.detail+'</div>' : "") : '<span class="reason">'+(s.detail||REASON_CN[s.reason]||s.reason)+'</span>';
+    tr.innerHTML = '<td>'+s.sequence+'</td><td>'+s.vessel+'<div class="muted">'+s.berth+'</div></td><td>'+when+'</td><td>'+who+'</td>';
+    sb.appendChild(tr);
+  }
+  const ob = $("occ-body"); ob.innerHTML = "";
+  for (const o of plan.occupancy) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = '<td>'+o.berth+'</td><td>'+o.vessel+'</td><td>'+hour(o.start_hour)+'–'+hour(o.end_hour)+'</td>'+
+      '<td>'+(o.source==="ongoing" ? '<span class="ok-text">封航前已在泊</span>' : "复航进场")+'<div class="muted">'+(o.detail||"")+'</div></td>';
+    ob.appendChild(tr);
+  }
+}
+
+$("vessel-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const data = Object.fromEntries(fd);
+  data.dangerous_goods = data.dangerous_goods === "true";
+  for (const k of ["eta_hour","vessel_length_m","berth_length_m"]) data[k] = parseInt(data[k],10);
+  for (const k of ["draft_m","berth_depth_m","operation_duration_hours"]) data[k] = parseFloat(data[k]);
+  try {
+    await api("/api/records","POST",{reference:"VOY-"+Date.now(), data});
+    flash("建档成功", true); ev.target.reset(); refresh();
+  } catch (e) { flash(e.message); }
+});
+
+$("records-body").addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("button[data-act]");
+  if (!btn) return;
+  const id = btn.dataset.id, v = parseInt(btn.dataset.v,10);
+  let data = {};
+  if (btn.dataset.act === "confirm") { const p = prompt("引航员编号", "P-01"); if (!p) return; data = {pilot_id:p}; }
+  if (btn.dataset.act === "berth") data = {actual_draft_m: 10.3};
+  if (btn.dataset.act === "depart") data = {cargo_operation_complete: true};
+  if (btn.dataset.act === "cancel") { const r = prompt("取消原因", "调度取消"); if (!r) return; data = {cancel_reason:r}; }
+  try {
+    await api("/api/records/"+id+"/actions/"+btn.dataset.act, "POST", {expected_version:v, data});
+    flash("操作成功", true); refresh();
+  } catch (e) { flash(e.message); }
+});
+
+$("btn-close").onclick = async () => {
+  try {
+    await api("/api/channel/close","POST",{data:{close_hour:Number($("close-hour").value), reason:"航道封航，统一候泊"}});
+    flash("已封航，未开始船舶转入候泊", true); refresh();
+  } catch (e) { flash(e.message); }
+};
+$("btn-reopen").onclick = async () => {
+  try {
+    await api("/api/channel/reopen","POST",{data:{reopen_hour:Number($("reopen-hour").value), channel_depth_m:Number($("channel-depth").value), channel_transit_hours:Number($("transit-hours").value), pilots:pilotsPayload()}});
+    flash("复航重排完成", true); refresh();
+  } catch (e) { flash(e.message); }
+};
+$("btn-refresh").onclick = refresh;
+refresh();
 </script>
 </body>
 </html>

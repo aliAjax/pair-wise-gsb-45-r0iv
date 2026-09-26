@@ -6,12 +6,13 @@ from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import parse_qs, urlparse
 
-from .domain import Actor, DomainError, PermissionDenied, ValidationError
+from .domain import Actor, DomainError, NotFound, PermissionDenied, ValidationError
 
 
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+PLAN_RE = re.compile(r"^/api/plans/(\d+)$")
 
 
 def make_handler(service: Any, static_dir: Path):
@@ -87,6 +88,19 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
                     return
+                if parsed.path == "/api/channel/status":
+                    self._send(200, service.channel_status(self._actor()))
+                    return
+                if parsed.path == "/api/plans/latest":
+                    self._send(200, service.latest_plan(self._actor()) or {})
+                    return
+                match = PLAN_RE.match(parsed.path)
+                if match:
+                    plan = service.get_plan(self._actor(), int(match.group(1)))
+                    if plan is None:
+                        raise NotFound("重排计划不存在")
+                    self._send(200, plan)
+                    return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
                 self._handle_error(exc)
@@ -98,6 +112,14 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/records":
                     record = service.create(self._actor(), body.get("reference", ""), body.get("data", {}))
                     self._send(201, record)
+                    return
+                if parsed.path == "/api/channel/close":
+                    result = service.close_channel(self._actor(), body.get("data", {}))
+                    self._send(200, result)
+                    return
+                if parsed.path == "/api/channel/reopen":
+                    result = service.reopen_channel(self._actor(), body.get("data", {}))
+                    self._send(200, result)
                     return
                 match = ACTION_RE.match(parsed.path)
                 if match:
