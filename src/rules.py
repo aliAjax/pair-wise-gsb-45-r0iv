@@ -5,9 +5,12 @@ from .domain import Actor, Conflict, ValidationError, boolean, choice, integer, 
 
 
 INITIAL_STATE = "draft"
+WAITING_STATE = "waiting"
+SCHEDULED_STATE = "scheduled"
+UNSTARTED_STATES = {"draft", "confirmed", "scheduled"}
 CREATE_ROLES = {'port_controller'}
-ACTION_ROLES = {'confirm': {'port_controller'}, 'berth': {'port_controller'}, 'depart': {'port_controller'}, 'cancel': {'port_controller'}}
-TRANSITIONS = {'confirm': {'draft': 'confirmed'}, 'berth': {'confirmed': 'berthed'}, 'depart': {'berthed': 'departed'}, 'cancel': {'draft': 'cancelled', 'confirmed': 'cancelled'}}
+ACTION_ROLES = {'confirm': {'port_controller'}, 'berth': {'port_controller'}, 'depart': {'port_controller'}, 'cancel': {'port_controller'}, 'port_close': {'port_controller'}, 'port_reopen': {'port_controller'}}
+TRANSITIONS = {'confirm': {'draft': 'confirmed'}, 'berth': {'confirmed': 'berthed', 'scheduled': 'berthed'}, 'depart': {'berthed': 'departed'}, 'cancel': {'draft': 'cancelled', 'confirmed': 'cancelled', 'waiting': 'cancelled', 'scheduled': 'cancelled'}}
 
 
 class DomainRules:
@@ -27,18 +30,17 @@ class DomainRules:
 
     def validate_create(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         p = dict(payload)
-        vessel = text(p, "vessel")
+        text(p, "vessel")
+        text(p, "captain_name")
         berth = text(p, "berth")
         vessel_length = number(p, "vessel_length_m", 1)
         berth_length = number(p, "berth_length_m", 1)
         draft = number(p, "draft_m", 0)
         berth_depth = number(p, "berth_depth_m", 0)
-        eta = integer(p, "eta_hour", 0, 23)
-        etd = integer(p, "etd_hour", 1, 24)
+        integer(p, "eta_hour", 0, 47)
+        integer(p, "operation_hours", 1, 72)
         choice(p, "risk_level", ["low", "medium", "high"])
         dangerous = boolean(p, "dangerous_goods")
-        if etd <= eta:
-            raise ValidationError("etd_hour必须晚于eta_hour")
         if berth_length < vessel_length:
             raise ValidationError("泊位长度不足")
         if berth_depth - draft < 0.5:
@@ -49,8 +51,9 @@ class DomainRules:
 
     def prepare_create(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         p = self.validate_create(payload)
+        p["etd_hour"] = int(p["eta_hour"]) + int(p["operation_hours"])
         p["safety_margin_m"] = round(float(p["berth_depth_m"]) - float(p["draft_m"]), 2)
-        p["window_hours"] = int(p["etd_hour"]) - int(p["eta_hour"])
+        p["window_hours"] = int(p["operation_hours"])
         p["quay_ok"] = bool(p["berth_length_m"] >= p["vessel_length_m"] and p["safety_margin_m"] >= 0.5)
         return p
 

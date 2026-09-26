@@ -87,6 +87,18 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
                     return
+                if parsed.path == "/api/port/status":
+                    self._send(200, service.port_status(self._actor()))
+                    return
+                if parsed.path == "/api/waiting":
+                    self._send(200, {"items": service.waiting_queue(self._actor())})
+                    return
+                if parsed.path == "/api/channel-slots":
+                    self._send(200, {"items": service.channel_slots(self._actor())})
+                    return
+                if parsed.path == "/api/berth-occupancy":
+                    self._send(200, {"items": service.berth_occupancy(self._actor())})
+                    return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
                 self._handle_error(exc)
@@ -98,6 +110,18 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/records":
                     record = service.create(self._actor(), body.get("reference", ""), body.get("data", {}))
                     self._send(201, record)
+                    return
+                if parsed.path == "/api/port/close":
+                    self._send(200, service.close_port(self._actor(), body.get("reason", ""), body.get("closed_at_hour")))
+                    return
+                if parsed.path == "/api/port/reopen":
+                    self._send(200, service.reopen_port(
+                        self._actor(),
+                        body.get("reopen_hour"),
+                        body.get("channel_depth_m"),
+                        body.get("channel_transit_hours", 2),
+                        body.get("available_pilots", []),
+                    ))
                     return
                 match = ACTION_RE.match(parsed.path)
                 if match:

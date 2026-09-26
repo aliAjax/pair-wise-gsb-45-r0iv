@@ -3,31 +3,197 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>港口泊位与航道调度</title>
+  <title>港口复航重排台</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; }
-    main { max-width: 960px; margin: auto; }
-    button { padding: .55rem .9rem; cursor: pointer; }
-    pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
-    .row { display: flex; gap: 1rem; align-items: center; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 1.5rem; color: #17212b; background: #f7f9fb; }
+    main { max-width: 1180px; margin: auto; }
+    h1 { font-size: 1.4rem; } h2 { font-size: 1.05rem; margin: 1.4rem 0 .5rem; }
+    section { background: #fff; border: 1px solid #e3e8ee; border-radius: 10px; padding: 1rem 1.2rem; margin-bottom: 1rem; }
+    button { padding: .45rem .9rem; cursor: pointer; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; }
+    button.ghost { background: #fff; color: #2563eb; }
+    input, select { padding: .35rem .5rem; border: 1px solid #cbd5e1; border-radius: 6px; }
+    label { display: inline-flex; flex-direction: column; font-size: .78rem; color: #475569; gap: .15rem; }
+    .row { display: flex; gap: .8rem; align-items: flex-end; flex-wrap: wrap; }
+    table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+    th, td { border-bottom: 1px solid #e3e8ee; padding: .4rem .5rem; text-align: left; }
+    th { color: #64748b; font-weight: 600; }
+    .badge { display: inline-block; padding: .15rem .6rem; border-radius: 999px; font-size: .8rem; font-weight: 600; }
+    .open { background: #dcfce7; color: #166534; } .closed { background: #fee2e2; color: #991b1b; }
+    .state { background: #e2e8f0; color: #334155; }
+    .state.waiting { background: #fef9c3; color: #854d0e; } .state.scheduled { background: #dbeafe; color: #1d4ed8; }
+    .state.berthed { background: #dcfce7; color: #166534; } .state.departed, .state.cancelled { background: #f1f5f9; color: #94a3b8; }
+    .danger { color: #b91c1c; font-weight: 600; }
+    #error { color: #b91c1c; margin: .5rem 0; white-space: pre-wrap; }
+    #result { background: #0f172a; color: #e2e8f0; padding: .8rem; border-radius: 8px; font-size: .78rem; overflow: auto; display: none; }
+    .muted { color: #94a3b8; font-size: .8rem; }
   </style>
 </head>
 <body>
 <main>
-  <h1>港口泊位与航道调度</h1>
-  <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
-  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
-  <pre id="output">点击上方按钮读取服务状态。</pre>
+  <h1>港口复航重排台 <span id="port-badge" class="badge open">…</span></h1>
+  <div id="error"></div>
+
+  <section>
+    <h2>港口状态</h2>
+    <div class="row">
+      <label>封航原因 <input id="close-reason" value="台风预警" size="14"></label>
+      <label>封航时刻(时) <input id="close-hour" type="number" value="8" style="width:5rem"></label>
+      <button id="close-btn" class="ghost">封航</button>
+      <span class="muted">|</span>
+      <label>复航时刻(时) <input id="reopen-hour" type="number" value="18" style="width:5rem"></label>
+      <label>航道水深(米) <input id="channel-depth" type="number" step="0.1" value="12.5" style="width:5rem"></label>
+      <label>通行时长(时) <input id="transit-hours" type="number" value="2" style="width:4rem"></label>
+      <label>可用引航员 <input id="pilots" value="P-01,P-02,P-03" size="14"></label>
+      <button id="reopen-btn">复航重排</button>
+      <button id="refresh-btn" class="ghost">刷新</button>
+    </div>
+    <div id="events" class="muted"></div>
+    <pre id="result"></pre>
+  </section>
+
+  <section>
+    <h2>候泊顺序（为何等待）</h2>
+    <table id="waiting"><thead><tr><th>#</th><th>船舶</th><th>船长</th><th>危险品</th><th>风险</th><th>到港时刻</th><th>等待原因</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>航道时段（何时进场，每船独占）</h2>
+    <table id="slots"><thead><tr><th>次序</th><th>船舶</th><th>航道时段</th><th>引航员</th><th>分配时间</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>泊位占用</h2>
+    <table id="occupancy"><thead><tr><th>泊位</th><th>船舶</th><th>占用窗口</th><th>来源</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>船舶计划</h2>
+    <table id="records"><thead><tr><th>ID</th><th>船舶</th><th>船长</th><th>泊位</th><th>吃水</th><th>危险品等级</th><th>到港</th><th>作业时长</th><th>状态</th><th>说明</th></tr></thead><tbody></tbody></table>
+    <h2>新建计划</h2>
+    <div class="row">
+      <label>航次号 <input id="f-ref" value="VOY-1001" size="9"></label>
+      <label>船舶 <input id="f-vessel" value="HaiYun" size="9"></label>
+      <label>船长 <input id="f-captain" value="王船长" size="7"></label>
+      <label>泊位 <input id="f-berth" value="B12" size="5"></label>
+      <label>船长(米) <input id="f-vlen" type="number" value="180" style="width:5rem"></label>
+      <label>泊位长(米) <input id="f-blen" type="number" value="220" style="width:5rem"></label>
+      <label>吃水(米) <input id="f-draft" type="number" step="0.1" value="10.2" style="width:5rem"></label>
+      <label>泊位水深(米) <input id="f-bdepth" type="number" step="0.1" value="11.5" style="width:5rem"></label>
+      <label>到港时刻 <input id="f-eta" type="number" value="6" style="width:4rem"></label>
+      <label>作业时长 <input id="f-op" type="number" value="12" style="width:4rem"></label>
+      <label>风险 <select id="f-risk"><option>low</option><option>medium</option><option>high</option></select></label>
+      <label>危险品 <select id="f-danger"><option value="false">否</option><option value="true">是</option></select></label>
+      <label>危险品等级 <input id="f-dclass" value="" size="7"></label>
+      <button id="create-btn">创建</button>
+    </div>
+  </section>
 </main>
 <script>
-const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
-async function show(path) {
-  const response = await fetch(path, {headers});
+const headers = {"X-User-Id":"dispatcher-01","X-Role":"port_controller","X-Org":"port"};
+const $ = id => document.getElementById(id);
+const STATE_NAMES = {draft:"草稿", confirmed:"已确认", waiting:"候泊", scheduled:"已排期", berthed:"靠泊作业", departed:"已离泊", cancelled:"已取消"};
+const SOURCE_NAMES = {berth:"靠泊", closure:"封航在泊", schedule:"重排计划"};
+
+async function api(path, options) {
+  const response = await fetch(path, Object.assign({headers: Object.assign({"Content-Type":"application/json"}, headers)}, options || {}));
   const data = await response.json();
-  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+  if (!response.ok) throw new Error(data.message || response.status);
+  return data;
 }
-document.getElementById("load").onclick = () => show("/api/records?limit=20");
-document.getElementById("stats").onclick = () => show("/api/stats");
+function showError(exc) { $("error").textContent = exc.message || String(exc); }
+function showResult(data) { const el = $("result"); el.style.display = "block"; el.textContent = JSON.stringify(data, null, 2); }
+function cell(row, text, cls) { const td = row.insertCell(); td.textContent = text; if (cls) td.className = cls; return td; }
+function fill(tableId, rows) { const tbody = $(tableId).getElementsByTagName("tbody")[0]; tbody.innerHTML = ""; rows.forEach(build => { build(tbody.insertRow()); }); }
+
+function recordNote(r) {
+  const p = r.payload;
+  if (r.state === "waiting") return p.wait_reason || "候泊中";
+  if (r.state === "scheduled" && p.channel_slot) return "预计" + p.channel_slot.start_hour + "时进航道，" + p.berth_window.start_hour + "时靠泊" + p.berth + "，引航员" + (p.pilot_id || "-");
+  if (r.state === "berthed") return "泊位作业中";
+  return "";
+}
+
+async function refresh() {
+  $("error").textContent = "";
+  try {
+    const [status, waiting, slots, occupancy, records] = await Promise.all([
+      api("/api/port/status"), api("/api/waiting"), api("/api/channel-slots"), api("/api/berth-occupancy"), api("/api/records?limit=100"),
+    ]);
+    const badge = $("port-badge");
+    badge.textContent = status.status === "closed" ? "封航中" : "正常通航";
+    badge.className = "badge " + (status.status === "closed" ? "closed" : "open");
+    $("events").textContent = status.events.map(e => "#" + e.id + " " + (e.event_type === "closed" ? "封航" : "复航") + "：" + e.reason).join("　|　");
+
+    fill("waiting", waiting.items.map(w => row => {
+      const p = w.payload;
+      cell(row, w.position);
+      cell(row, p.vessel);
+      cell(row, p.captain_name || "-");
+      cell(row, p.dangerous_goods ? "是(" + (p.dangerous_class || "") + ")" : "否", p.dangerous_goods ? "danger" : "");
+      cell(row, p.risk_level);
+      cell(row, p.eta_hour + "时");
+      cell(row, w.queue_reason || p.wait_reason || "");
+    }));
+
+    fill("slots", slots.items.map(s => row => {
+      cell(row, s.sequence);
+      cell(row, s.vessel);
+      cell(row, s.start_hour + "时 - " + s.end_hour + "时");
+      cell(row, s.pilot_id || "-");
+      cell(row, s.created_at);
+    }));
+
+    fill("occupancy", occupancy.items.map(o => row => {
+      cell(row, o.berth);
+      cell(row, o.vessel);
+      cell(row, o.start_hour + "时 - " + o.end_hour + "时");
+      cell(row, SOURCE_NAMES[o.source] || o.source);
+    }));
+
+    fill("records", records.items.map(r => row => {
+      const p = r.payload;
+      cell(row, r.id);
+      cell(row, p.vessel);
+      cell(row, p.captain_name || "-");
+      cell(row, p.berth);
+      cell(row, p.draft_m + "米");
+      cell(row, p.dangerous_goods ? (p.dangerous_class || "是") : "否", p.dangerous_goods ? "danger" : "");
+      cell(row, p.eta_hour + "时");
+      cell(row, (p.operation_hours || "-") + "小时");
+      cell(row, STATE_NAMES[r.state] || r.state, "state " + r.state);
+      cell(row, recordNote(r));
+    }));
+  } catch (exc) { showError(exc); }
+}
+
+$("close-btn").onclick = async () => {
+  try { showResult(await api("/api/port/close", {method: "POST", body: JSON.stringify({reason: $("close-reason").value, closed_at_hour: Number($("close-hour").value)})})); await refresh(); }
+  catch (exc) { showError(exc); }
+};
+$("reopen-btn").onclick = async () => {
+  try {
+    const pilots = $("pilots").value.split(",").map(s => s.trim()).filter(Boolean);
+    showResult(await api("/api/port/reopen", {method: "POST", body: JSON.stringify({
+      reopen_hour: Number($("reopen-hour").value), channel_depth_m: Number($("channel-depth").value),
+      channel_transit_hours: Number($("transit-hours").value), available_pilots: pilots,
+    })}));
+    await refresh();
+  } catch (exc) { showError(exc); }
+};
+$("create-btn").onclick = async () => {
+  try {
+    await api("/api/records", {method: "POST", body: JSON.stringify({reference: $("f-ref").value, data: {
+      vessel: $("f-vessel").value, captain_name: $("f-captain").value, berth: $("f-berth").value,
+      vessel_length_m: Number($("f-vlen").value), berth_length_m: Number($("f-blen").value),
+      draft_m: Number($("f-draft").value), berth_depth_m: Number($("f-bdepth").value),
+      eta_hour: Number($("f-eta").value), operation_hours: Number($("f-op").value),
+      risk_level: $("f-risk").value, dangerous_goods: $("f-danger").value === "true", dangerous_class: $("f-dclass").value,
+    }})});
+    await refresh();
+  } catch (exc) { showError(exc); }
+};
+$("refresh-btn").onclick = refresh;
+refresh();
 </script>
 </body>
 </html>
